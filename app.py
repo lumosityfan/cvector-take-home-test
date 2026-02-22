@@ -1,44 +1,93 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from sqlmodel import Field, Session, SQLModel, create_engine, select
 from datetime import datetime
+from typing import Annotated
+
 app = FastAPI()
 
-class Facility(BaseModel):
-    facility_name: str
-    facility_id: int
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=True,
+)
 
-class Asset(BaseModel):
-    asset_name: str
-    asset_id: int
-    facility_id: int
+class FacilityBase(SQLModel):
+    facility_name: str = Field(index=True, unique=True)
 
-class SensorReading(BaseModel):
-    sensor_name: str
-    sensor_id: int
-    asset_id: int
-    facility_id: int
+class Facility(FacilityBase, table=True):
+    facility_id: int | None = Field(default=None, primary_key=True)
+
+class AssetBase(SQLModel):
+    asset_name: str = Field(index=True)
+    facility_id: int | None = Field(default=None, foreign_key="facility.facility_id")
+
+class Asset(AssetBase, table=True):
+    asset_id: int | None = Field(default=None, primary_key=True)
+
+class SensorReadingBase(SQLModel):
+    sensor_name: str = Field(index=True)
+    asset_id: int | None = Field(default=None, foreign_key="asset.asset_id")
+    facility_id: int | None = Field(default=None, foreign_key="facility.facility_id")
     timestamp: datetime
     temperature: float
     pressure: float
     power_consumption: float
     production_output: float
 
-dummy_facilities = [
-    Facility(facility_name="Factory A", facility_id=1),
-    Facility(facility_name="Factory B", facility_id=2)
-]
+class SensorReading(SensorReadingBase, table=True):
+    sensor_id: int | None = Field(default=None, primary_key=True)
 
-dummy_assets = [
-    Asset(asset_name="Machine 1", asset_id=1, facility_id=1),
-    Asset(asset_name="Machine 2", asset_id=2, facility_id=1),
-    Asset(asset_name="Machine 3", asset_id=3, facility_id=2)
-]
+sqlite_file_name = "database.db"
+sqlite_url = f"sqlite:///{sqlite_file_name}"
 
-dummy_sensor_readings = [
-    SensorReading(sensor_name="Sensor 1", sensor_id=1, asset_id=1, facility_id=1, timestamp=datetime.now(), temperature=75.0, pressure=1.0, power_consumption=100.0, production_output=50.0),
-    SensorReading(sensor_name="Sensor 2", sensor_id=2, asset_id=2, facility_id=1, timestamp=datetime.now(), temperature=80.0, pressure=1.2, power_consumption=150.0, production_output=60.0),
-    SensorReading(sensor_name="Sensor 3", sensor_id=3, asset_id=3, facility_id=2, timestamp=datetime.now(), temperature=70.0, pressure=0.8, power_consumption=120.0, production_output=55.0)
-]
+connect_args = {"check_same_thread": False}
+engine = create_engine(sqlite_url, connect_args=connect_args)
+
+def create_db_and_tables():
+    SQLModel.metadata.create_all(engine)
+
+def get_session():
+    with Session(engine) as session:
+        yield session
+
+SessionDep = Annotated[Session, Depends(get_session)]
+
+@app.on_event("startup")
+def on_startup():
+    create_db_and_tables()
+
+@app.post("/v1/facilities", response_model=Facility)
+def create_facility(facility: FacilityBase, session: SessionDep):
+    db_hero = Facility.model_validate(facility)
+    session.add(db_hero)
+    session.commit()
+    session.refresh(db_hero)
+    return db_hero
+
+@app.post("/v1/assets", response_model=Asset)
+def create_asset(asset: AssetBase, session: SessionDep):
+    db_asset = Asset.model_validate(asset)
+    if not session.get(Facility, asset.facility_id):
+        raise HTTPException(status_code=400, detail="Facility not found")
+    session.add(db_asset)
+    session.commit()
+    session.refresh(db_asset)
+    return db_asset
+
+@app.post("/v1/sensor_readings", response_model=SensorReading)
+def create_sensor_reading(sensor_reading: SensorReadingBase, session: SessionDep):
+    db_sensor_reading = SensorReading.model_validate(sensor_reading)
+    if not session.get(Facility, sensor_reading.facility_id):
+        raise HTTPException(status_code=400, detail="Facility not found")
+    if not session.get(Asset, sensor_reading.asset_id):
+        raise HTTPException(status_code=400, detail="Asset not found")
+    session.add(db_sensor_reading)
+    session.commit()
+    session.refresh(db_sensor_reading)
+    return db_sensor_reading
 
 ## Will update API endpoints once connection to database has been established. For now, these endpoints return dummy data for testing purposes.
 
@@ -47,56 +96,48 @@ def read_root():
     return {"message": "Welcome to the Manufacturing Facility API"}
 
 @app.get("/v1/facilities")
-def get_facilities():
-    return dummy_facilities
+def get_facilities(session: SessionDep):
+    return session.exec(select(Facility)).all()
 
 @app.get("/v1/facilities/{facility_id}")
-def get_facility(facility_id: int):
-    for facility in dummy_facilities:
-        if facility.facility_id == facility_id:
-            return facility
-    return {"error": "Facility not found"}
+def get_facility(facility_id: int, session: SessionDep):
+    facility = session.get(Facility, facility_id)
+    if not facility:
+        return {"error": "Facility not found"}
+    return facility
 
 @app.get("/v1/facilities/{facility_id}/assets")
-def get_facility_assets(facility_id: int):
-    assets = [asset for asset in dummy_assets if asset.facility_id == facility_id]
+def get_facility_assets(facility_id: int, session: SessionDep):
+    assets = session.exec(select(Asset).where(Asset.facility_id == facility_id)).all()
     return assets
 
 @app.get("/v1/facilities/{facility_id}/assets/{asset_id}")
-def get_asset(facility_id: int, asset_id: int):
-    for asset in dummy_assets:
-        if asset.facility_id == facility_id and asset.asset_id == asset_id:
-            return asset
-    return {"error": "Asset not found"}
+def get_facility_asset(facility_id: int, asset_id: int, session: SessionDep):
+    asset = session.get(Asset, asset_id)
+    if not asset or asset.facility_id != facility_id:
+        return {"error": "Asset not found"}
+    return asset
 
-@app.get("/v1/sensors/{sensor_id}/readings")
-def get_sensor_readings(sensor_id: int):
-    readings = [reading for reading in dummy_sensor_readings if reading.sensor_id == sensor_id]
+@app.get("/v1/sensor_readings/{sensor_id}/readings")
+def get_sensor_readings(sensor_id: int, session: SessionDep):
+    readings = session.exec(select(SensorReading).where(SensorReading.sensor_id == sensor_id)).all()
     return readings
 
-@app.get("/v1/sensors")
-def get_sensors():
-    sensors = [{"sensor_id": reading.sensor_id, "sensor_name": reading.sensor_name} for reading in dummy_sensor_readings]
+@app.get("/v1/sensor_readings")
+def get_sensor_readings(session: SessionDep):
+    sensors = session.exec(select(SensorReading).distinct()).all()
     return sensors
 
 @app.get("/v1/facilities/{facility_id}/status")
-def get_facility_status(facility_id: int):
-    assets = [asset for asset in dummy_assets if asset.facility_id == facility_id]
+def get_facility_status(facility_id: int, session: SessionDep):
+    assets = session.exec(select(Asset).where(Asset.facility_id == facility_id)).all()
     if not assets:
         return {"error": "Facility not found"}
     
     status = {
         "facility_id": facility_id,
-        "assets": []
+        "total_power_consumption": sum(session.exec(select(SensorReading.power_consumption).where(SensorReading.asset_id == asset.asset_id)).all() for asset in assets),
+        "total_production_output": sum(session.exec(select(SensorReading.production_output).where(SensorReading.asset_id == asset.asset_id)).all() for asset in assets),
     }
-    
-    for asset in assets:
-        asset_readings = [reading for reading in dummy_sensor_readings if reading.asset_id == asset.asset_id]
-        asset_status = {
-            "asset_id": asset.asset_id,
-            "asset_name": asset.asset_name,
-            "latest_reading": asset_readings[-1] if asset_readings else None
-        }
-        status["assets"].append(asset_status)
-    
+
     return status
