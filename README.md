@@ -30,3 +30,10 @@ GET /v1/sensors
 GET /v1/facilities/{facility_id}/status
 
 used to generate the website and the various data necessary to run the dashboard.
+
+In order to generate the website you need to go to the frontend folder titled "cvector-take-home-test" through
+
+cd cvector-take-home-test
+npm run dev
+
+Both actions will allow the website to work properly.

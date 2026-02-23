@@ -62,6 +62,8 @@ def on_startup():
 @app.post("/v1/facilities", response_model=Facility)
 def create_facility(facility: FacilityBase, session: SessionDep):
     db_hero = Facility.model_validate(facility)
+    if session.exec(select(Facility).where(Facility.facility_name == facility.facility_name)).first():
+        raise HTTPException(status_code=400, detail="Facility already exists")
     session.add(db_hero)
     session.commit()
     session.refresh(db_hero)
@@ -89,12 +91,6 @@ def create_sensor_reading(sensor_reading: SensorReadingBase, session: SessionDep
     session.refresh(db_sensor_reading)
     return db_sensor_reading
 
-## Will update API endpoints once connection to database has been established. For now, these endpoints return dummy data for testing purposes.
-
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to the Manufacturing Facility API"}
-
 @app.get("/v1/facilities")
 def get_facilities(session: SessionDep):
     return session.exec(select(Facility)).all()
@@ -118,26 +114,51 @@ def get_facility_asset(facility_id: int, asset_id: int, session: SessionDep):
         return {"error": "Asset not found"}
     return asset
 
-@app.get("/v1/sensor_readings/{sensor_id}/readings")
+@app.get("/v1/assets")
+def get_assets(session: SessionDep):
+    return session.exec(select(Asset)).all()
+
+@app.get("/v1/sensors/{sensor_id}/readings")
 def get_sensor_readings(sensor_id: int, session: SessionDep):
     readings = session.exec(select(SensorReading).where(SensorReading.sensor_id == sensor_id)).all()
     return readings
 
-@app.get("/v1/sensor_readings")
-def get_sensor_readings(session: SessionDep):
-    sensors = session.exec(select(SensorReading).distinct()).all()
-    return sensors
+
+@app.get("/v1/sensors")
+def get_sensors(
+    session: SessionDep,
+    facility_id: int | None = Query(default=None),
+    asset_id: int | None = Query(default=None),
+    start_time: datetime | None = Query(default=None),
+    end_time: datetime | None = Query(default=None),
+):
+    query = select(SensorReading)
+
+    if facility_id is not None:
+        query = query.where(SensorReading.facility_id == facility_id)
+    if asset_id is not None:
+        query = query.where(SensorReading.asset_id == asset_id)
+    if start_time is not None:
+        query = query.where(SensorReading.timestamp >= start_time)
+    if end_time is not None:
+        query = query.where(SensorReading.timestamp <= end_time)
+
+    return session.exec(query).all()
 
 @app.get("/v1/facilities/{facility_id}/status")
 def get_facility_status(facility_id: int, session: SessionDep):
-    assets = session.exec(select(Asset).where(Asset.facility_id == facility_id)).all()
-    if not assets:
-        return {"error": "Facility not found"}
+    sensor_readings = session.exec(select(SensorReading).where(SensorReading.facility_id == facility_id)).all()
+    if not sensor_readings:
+        return {"error": "Facility readings not found"}
+    sensor_readings.sort(key=lambda r: r.timestamp, reverse=True)
     
     status = {
         "facility_id": facility_id,
-        "total_power_consumption": sum(session.exec(select(SensorReading.power_consumption).where(SensorReading.asset_id == asset.asset_id)).all() for asset in assets),
-        "total_production_output": sum(session.exec(select(SensorReading.production_output).where(SensorReading.asset_id == asset.asset_id)).all() for asset in assets),
+        "latest_reading_time": sensor_readings[0].timestamp,
+        "latest_temperature": sensor_readings[0].temperature,
+        "latest_pressure": sensor_readings[0].pressure,
+        "total_power_consumption": sum(reading.power_consumption for reading in sensor_readings),
+        "total_production_output": sum(reading.production_output for reading in sensor_readings),
     }
 
     return status
