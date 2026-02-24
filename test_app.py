@@ -1,15 +1,36 @@
+import pytest
 from fastapi.testclient import TestClient
 from datetime import datetime, timezone
+from sqlmodel import SQLModel, create_engine, Session
+from sqlalchemy.pool import StaticPool
 from app import app, get_session
 
-client = TestClient(app)
+@pytest.fixture(name="client")
+def client_fixture():
+    # Create a fresh in-memory DB for each test
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
 
-def test_get_facilities():
+    def get_session_override():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = get_session_override
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+    SQLModel.metadata.drop_all(engine)
+
+
+def test_get_facilities(client):
     response = client.get("/v1/facilities")
     assert response.status_code == 200
     assert isinstance(response.json(), list)
 
-def test_create_and_get_facility():
+def test_create_and_get_facility(client):
     response = client.post("/v1/facilities", json={"facility_name": "Test Facility"})
     assert response.status_code == 200
     facility = response.json()
@@ -19,7 +40,7 @@ def test_create_and_get_facility():
     assert response.status_code == 200
     assert response.json() == facility
 
-def test_create_and_get_asset():
+def test_create_and_get_asset(client):
     response = client.post("/v1/facilities", json={"facility_name": "Asset Test Facility"})
     assert response.status_code == 200
     facility = response.json()
@@ -34,7 +55,7 @@ def test_create_and_get_asset():
     assert response.status_code == 200
     assert response.json() == asset
 
-def test_create_and_get_sensor_reading():
+def test_create_and_get_sensor_reading(client):
     response = client.post("/v1/facilities", json={"facility_name": "Sensor Test Facility"})
     assert response.status_code == 200
     facility = response.json()

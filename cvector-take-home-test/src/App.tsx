@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import './App.css'
 import { Table } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -180,7 +180,7 @@ function App() {
 
     generateSensorReadings()
 
-    const intervalId = setInterval(generateSensorReadings, 5000);
+    const intervalId = setInterval(generateSensorReadings, 10000);
 
     return () => clearInterval(intervalId);
   }, [facilities, selectedFacility])
@@ -276,34 +276,67 @@ function App() {
   )
 }
 
+const METRICS = [
+  { key: 'temperature', label: 'Temperature', color: '#8884d8' },
+  { key: 'pressure', label: 'Pressure', color: '#82ca9d' },
+  { key: 'power_consumption', label: 'Power Consumption', color: '#ffc658' },
+  { key: 'production_output', label: 'Production Output', color: '#ff7300' },
+] as const
+
+const ASSET_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#9b59b6', '#f39c12', '#1abc9c']
+
 function SensorChart({ readings }: { readings: SensorReading[] }) {
-  // Filter for time before charting to avoid overcrowding - show last hour of data
-  const chartData = readings
-    .map(r => ({
-      time: new Date(r.timestamp).getTime(),
-      displayTime: new Date(r.timestamp).toLocaleTimeString(),
-      sensor_name: r.sensor_name,
-      temperature: r.temperature,
-      pressure: r.pressure,
-      power_consumption: r.power_consumption,
-      production_output: r.production_output,
-    }))
-    .sort((a, b) => a.time - b.time)
+  const assetNames = useMemo(() =>
+    [...new Set(readings.map(r => r.sensor_name))], [readings])
+
+  // Pivot data: one entry per timestamp, with a key per asset for each metric
+  const chartData = useMemo(() => {
+    const byTime = new Map<number, Record<string, any>>()
+
+    readings.forEach(r => {
+      const time = new Date(r.timestamp).getTime()
+      if (!byTime.has(time)) {
+        byTime.set(time, { time, displayTime: new Date(r.timestamp).toLocaleTimeString() })
+      }
+      const entry = byTime.get(time)!
+      entry[`${r.sensor_name}_temperature`] = r.temperature
+      entry[`${r.sensor_name}_pressure`] = r.pressure
+      entry[`${r.sensor_name}_power_consumption`] = r.power_consumption
+      entry[`${r.sensor_name}_production_output`] = r.production_output
+    })
+
+    return [...byTime.values()].sort((a, b) => a.time - b.time)
+  }, [readings])
 
   return (
-    <ResponsiveContainer width="100%" height={400}>
-      <LineChart data={chartData}>
-        <CartesianGrid strokeDasharray="3 3" />
-        <XAxis dataKey="displayTime" />
-        <YAxis />
-        <Tooltip />
-        <Legend />
-        <Line type="monotone" dataKey="temperature" stroke="#8884d8" name="Temperature" />
-        <Line type="monotone" dataKey="pressure" stroke="#82ca9d" name="Pressure" />
-        <Line type="monotone" dataKey="power_consumption" stroke="#ffc658" name="Power Consumption" />
-        <Line type="monotone" dataKey="production_output" stroke="#ff7300" name="Production Output" />
-      </LineChart>
-    </ResponsiveContainer>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+      {METRICS.map(metric => (
+        <div key={metric.key}>
+          <h3 style={{ textAlign: 'center' }}>{metric.label}</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={chartData} isAnimationActive={false}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="displayTime" />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              {assetNames.map((name, i) => (
+                <Line
+                  key={name}
+                  type="monotoneX"
+                  dataKey={`${name}_${metric.key}`}
+                  name={name}
+                  stroke={ASSET_COLORS[i % ASSET_COLORS.length]}
+                  dot={false}
+                  connectNulls={true}
+                  isAnimationActive={false}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      ))}
+    </div>
   )
 }
 
