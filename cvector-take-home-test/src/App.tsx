@@ -102,13 +102,13 @@ function App() {
       ])
       setSensorReadings(sensorData)
       // Fetch all statuses at once
-        const statusEntries = await Promise.all(
-          facilityData.map(async (f) => {
-            const status = await fetchFacilityStatus(f.facility_id)
-            return [f.facility_id, status] as [number, FacilityStatus]
-          })
-        )
-        setFacilityStatuses(new Map(statusEntries))
+      const statusEntries = await Promise.all(
+        facilityData.map(async (f) => {
+          const status = await fetchFacilityStatus(f.facility_id)
+          return [f.facility_id, status] as [number, FacilityStatus]
+        })
+      )
+      setFacilityStatuses(new Map(statusEntries))
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -163,12 +163,14 @@ function App() {
 
   // Poll results inputted into dashboard
   useEffect(() => {
+    if (facilities.length === 0) return // don't start polling until facilities are loaded
+
     generateSensorReadings()
 
     const intervalId = setInterval(generateSensorReadings, 5000);
 
     return () => clearInterval(intervalId);
-  }, [])
+  }, [facilities, selectedFacility])
 
   // Add these column definitions inside your App component (or just above the return)
 

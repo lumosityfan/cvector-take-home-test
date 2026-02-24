@@ -6,9 +6,13 @@ First, activate the virtual environment.
 
 source .venv/bin/activate
 
-Download FastAPI:
+Download FastAPI, Alembic, Uvicorn, and any other necessary dependencies:
 
-pip install "fastapi[standard]"
+pip install "fastapi[standard]" alembic uvicorn
+
+Initialize the database and schema through the init_db.py file:
+
+python init_db.py
 
 Activate the FastAPI server:
 
@@ -18,9 +22,8 @@ You can test out the API for yourself in the browser through the Swagger UI site
 
 127.0.0.1:8000/docs
 
-There are 8 API endpoints
+There are 7 API endpoints
 
-GET /
 GET /v1/facilities
 GET /v1/facilities/{facility_id}
 GET /v1/facilities/{facility_id}/assets
@@ -34,6 +37,7 @@ used to generate the website and the various data necessary to run the dashboard
 In order to generate the website you need to go to the frontend folder titled "cvector-take-home-test" through
 
 cd cvector-take-home-test
+npm install antd
 npm run dev
 
 Both actions will allow the website to work properly.
