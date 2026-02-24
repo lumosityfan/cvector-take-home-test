@@ -42,6 +42,7 @@ interface FacilityStatus {
 function App() {
   const [facilities, setFacilities] = useState<Facility[]>([])
   const [sensorReadings, setSensorReadings] = useState<SensorReading[]>([])
+  const [recentSensorReadings, setRecentSensorReadings] = useState<SensorReading[]>([])
   const [selectedFacility, setSelectedFacility] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -58,6 +59,14 @@ function App() {
     const response = await fetch(`${API_BASE_URL}/sensors?facility_id=${facilityId}`)
     if (!response.ok) throw new Error('Failed to fetch sensor readings')
     return response.json()
+  }
+
+  const fetchRecentSensorReadings = async (facilityId: number): Promise<SensorReading[]> => {
+    const response = await fetch(`${API_BASE_URL}/sensors?facility_id=${facilityId}`)
+    if (!response.ok) throw new Error('Failed to fetch sensor readings')
+    const data: SensorReading[] = await response.json()
+    const recentTime = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+    return data.filter(r => r.timestamp >= recentTime)
   }
 
   const fetchFacilityStatus = async (facilityId: number) => {
@@ -78,7 +87,7 @@ function App() {
         const facilityAssets = await fetchFacilityAssets(facility.facility_id)
         for (const asset of facilityAssets) {
           const sensorReading = {
-            sensor_name: `Sensor for ${asset.asset_name} at ${facility.facility_name}`,
+            sensor_name: `${asset.asset_name}`,
             asset_id: asset.asset_id,
             facility_id: facility.facility_id,
             timestamp: new Date().toISOString(),
@@ -96,11 +105,13 @@ function App() {
       }
       // After posting new reading, refresh data
       if (selectedFacility === null) return
-      const [facilityData, sensorData] = await Promise.all([
+      const [facilityData, sensorData, recentSensorData] = await Promise.all([
         fetchFacilities(),
         fetchSensorReadings(selectedFacility),
+        fetchRecentSensorReadings(selectedFacility)
       ])
       setSensorReadings(sensorData)
+      setRecentSensorReadings(recentSensorData)
       // Fetch all statuses at once
       const statusEntries = await Promise.all(
         facilityData.map(async (f) => {
@@ -148,10 +159,12 @@ function App() {
     if (selectedFacility === null) return
     const load = async () => {
       try {
-        const [sensorData] = await Promise.all([
+        const [sensorData, recentSensorData] = await Promise.all([
           fetchSensorReadings(selectedFacility),
+          fetchRecentSensorReadings(selectedFacility)
         ])
         setSensorReadings(sensorData)
+        setRecentSensorReadings(recentSensorData)
       } catch (err: any) {
         setError(err.message)
       } finally {
@@ -171,8 +184,6 @@ function App() {
 
     return () => clearInterval(intervalId);
   }, [facilities, selectedFacility])
-
-  // Add these column definitions inside your App component (or just above the return)
 
   const facilityColumns: ColumnsType<Facility & { status?: FacilityStatus }> = [
     {
@@ -212,7 +223,7 @@ function App() {
   ]
 
   const sensorColumns: ColumnsType<SensorReading> = [
-    { title: 'Sensor', dataIndex: 'sensor_name', key: 'sensor_name' },
+    { title: 'Asset', dataIndex: 'sensor_name', key: 'sensor_name' },
     {
       title: 'Timestamp',
       dataIndex: 'timestamp',
@@ -257,7 +268,7 @@ function App() {
           </section>
           <section>
             <h2>Sensor Readings Chart</h2>
-            {sensorReadings.length > 0 && <SensorChart readings={sensorReadings} />}
+            {recentSensorReadings.length > 0 && <SensorChart readings={recentSensorReadings} />}
           </section>
         </>
       )}
@@ -265,17 +276,19 @@ function App() {
   )
 }
 
-function SensorChart({ readings = [] }: { readings?: SensorReading[] }) {
+function SensorChart({ readings }: { readings: SensorReading[] }) {
+  // Filter for time before charting to avoid overcrowding - show last hour of data
   const chartData = readings
     .map(r => ({
-      time: new Date(r.timestamp).getTime(), // numeric ms for proper time axis
+      time: new Date(r.timestamp).getTime(),
       displayTime: new Date(r.timestamp).toLocaleTimeString(),
+      sensor_name: r.sensor_name,
       temperature: r.temperature,
       pressure: r.pressure,
       power_consumption: r.power_consumption,
       production_output: r.production_output,
     }))
-    .sort((a, b) => a.time - b.time) // ensure chronological order
+    .sort((a, b) => a.time - b.time)
 
   return (
     <ResponsiveContainer width="100%" height={400}>
@@ -285,10 +298,10 @@ function SensorChart({ readings = [] }: { readings?: SensorReading[] }) {
         <YAxis />
         <Tooltip />
         <Legend />
-        <Line type="monotone" dataKey="temperature" stroke="#e74c3c" dot={false} />
-        <Line type="monotone" dataKey="pressure" stroke="#3498db" dot={false} />
-        <Line type="monotone" dataKey="power_consumption" stroke="#2ecc71" dot={false} />
-        <Line type="monotone" dataKey="production_output" stroke="#f39c12" dot={false} />
+        <Line type="monotone" dataKey="temperature" stroke="#8884d8" name="Temperature" />
+        <Line type="monotone" dataKey="pressure" stroke="#82ca9d" name="Pressure" />
+        <Line type="monotone" dataKey="power_consumption" stroke="#ffc658" name="Power Consumption" />
+        <Line type="monotone" dataKey="production_output" stroke="#ff7300" name="Production Output" />
       </LineChart>
     </ResponsiveContainer>
   )

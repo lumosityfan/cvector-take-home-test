@@ -2,7 +2,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
+from contextlib import asynccontextmanager
 
 app = FastAPI()
 
@@ -13,6 +14,8 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=True,
 )
+
+MetricNames = Literal["temperature", "pressure", "power_consumption", "production_output"]
 
 class FacilityBase(SQLModel):
     facility_name: str = Field(index=True, unique=True)
@@ -55,9 +58,10 @@ def get_session():
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
-@app.on_event("startup")
-def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     create_db_and_tables()
+    yield
 
 @app.post("/v1/facilities", response_model=Facility)
 def create_facility(facility: FacilityBase, session: SessionDep):
@@ -118,10 +122,12 @@ def get_facility_asset(facility_id: int, asset_id: int, session: SessionDep):
 def get_assets(session: SessionDep):
     return session.exec(select(Asset)).all()
 
-@app.get("/v1/sensors/{sensor_id}/readings")
-def get_individual_sensor_readings(sensor_id: int, session: SessionDep):
-    readings = session.exec(select(SensorReading).where(SensorReading.sensor_id == sensor_id)).all()
-    return readings
+@app.get("/v1/sensors/{sensor_id}/reading")
+def get_individual_sensor_reading(sensor_id: int, session: SessionDep):
+    reading = session.exec(select(SensorReading).where(SensorReading.sensor_id == sensor_id)).first()
+    if not reading:
+        return {"error": "Sensor reading not found"}
+    return reading
 
 @app.get("/v1/sensors")
 def get_sensor_readings(
@@ -130,6 +136,7 @@ def get_sensor_readings(
     asset_id: int | None = Query(default=None),
     start_time: datetime | None = Query(default=None),
     end_time: datetime | None = Query(default=None),
+    metrics: list[MetricNames] | None = Query(default=None),
 ):
     query = select(SensorReading)
 
@@ -142,7 +149,16 @@ def get_sensor_readings(
     if end_time is not None:
         query = query.where(SensorReading.timestamp <= end_time)
 
-    return session.exec(query).all()
+    readings = session.exec(query).all()
+
+    if metrics:
+        base_fields = {"sensor_id", "sensor_name", "asset_id", "facility_id", "timestamp"}
+        return [
+            {k: v for k, v in reading.model_dump().items() if k in base_fields or k in metrics}
+            for reading in readings
+        ]
+
+    return readings
 
 @app.get("/v1/facilities/{facility_id}/status")
 def get_facility_status(facility_id: int, session: SessionDep):
