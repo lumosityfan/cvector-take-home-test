@@ -8,7 +8,15 @@ source .venv/bin/activate
 
 Download FastAPI, Alembic, Uvicorn, and any other necessary dependencies:
 
-pip install "fastapi[standard]" alembic uvicorn
+pip install "fastapi[standard]" alembic uvicorn sqlalchemy sqlmodel aiosqlite
+
+Initialize alembic through:
+
+alembic init
+
+Create an alembic revision through:
+
+alembic revision -m "initial"
 
 Initialize the database and schema through the init_db.py file:
 
