@@ -79,7 +79,7 @@ def create_asset(asset: AssetBase, session: SessionDep):
     session.refresh(db_asset)
     return db_asset
 
-@app.post("/v1/sensor_readings", response_model=SensorReading)
+@app.post("/v1/sensors", response_model=SensorReading)
 def create_sensor_reading(sensor_reading: SensorReadingBase, session: SessionDep):
     db_sensor_reading = SensorReading.model_validate(sensor_reading)
     if not session.get(Facility, sensor_reading.facility_id):
@@ -119,13 +119,12 @@ def get_assets(session: SessionDep):
     return session.exec(select(Asset)).all()
 
 @app.get("/v1/sensors/{sensor_id}/readings")
-def get_sensor_readings(sensor_id: int, session: SessionDep):
+def get_individual_sensor_readings(sensor_id: int, session: SessionDep):
     readings = session.exec(select(SensorReading).where(SensorReading.sensor_id == sensor_id)).all()
     return readings
 
-
 @app.get("/v1/sensors")
-def get_sensors(
+def get_sensor_readings(
     session: SessionDep,
     facility_id: int | None = Query(default=None),
     asset_id: int | None = Query(default=None),

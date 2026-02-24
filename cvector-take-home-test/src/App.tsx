@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import './App.css'
+import { Table } from 'antd'
+import type { ColumnsType } from 'antd/es/table'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer
@@ -36,15 +38,14 @@ interface FacilityStatus {
   total_production_output: number
 }
 
+
 function App() {
   const [facilities, setFacilities] = useState<Facility[]>([])
-  const [assets, setAssets] = useState<Asset[]>([])
   const [sensorReadings, setSensorReadings] = useState<SensorReading[]>([])
   const [selectedFacility, setSelectedFacility] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [facilityStatus, setFacilityStatus] = useState<FacilityStatus | null>(null)
-
+  const [facilityStatuses, setFacilityStatuses] = useState<Map<number, FacilityStatus>>(new Map())
   const API_BASE_URL = 'http://localhost:8000/v1'
 
   const fetchFacilities = async (): Promise<Facility[]> => {
@@ -53,14 +54,8 @@ function App() {
     return response.json()
   }
 
-  const fetchAssets = async (facilityId: number): Promise<Asset[]> => {
-    const response = await fetch(`${API_BASE_URL}/facilities/${facilityId}/assets`)
-    if (!response.ok) throw new Error('Failed to fetch assets')
-    return response.json()
-  }
-
-  const fetchSensorReadings = async (): Promise<SensorReading[]> => {
-    const response = await fetch(`${API_BASE_URL}/sensors?facility_id=${selectedFacility}`)
+  const fetchSensorReadings = async (facilityId: number): Promise<SensorReading[]> => {
+    const response = await fetch(`${API_BASE_URL}/sensors?facility_id=${facilityId}`)
     if (!response.ok) throw new Error('Failed to fetch sensor readings')
     return response.json()
   }
@@ -71,13 +66,74 @@ function App() {
     return response.json()
   }
 
-  // Fetch facilities on page load
+  const fetchFacilityAssets = async (facilityId: number): Promise<Asset[]> => {
+    const response = await fetch(`${API_BASE_URL}/facilities/${facilityId}/assets`)
+    if (!response.ok) throw new Error('Failed to fetch facility assets')
+    return response.json()
+  }
+
+  const generateSensorReadings = async () => {
+    try {
+      for (const facility of facilities) {
+        const facilityAssets = await fetchFacilityAssets(facility.facility_id)
+        for (const asset of facilityAssets) {
+          const sensorReading = {
+            sensor_name: `Sensor for ${asset.asset_name} at ${facility.facility_name}`,
+            asset_id: asset.asset_id,
+            facility_id: facility.facility_id,
+            timestamp: new Date().toISOString(),
+            temperature: Math.random() * 100,
+            pressure: Math.random() * 100,
+            power_consumption: Math.random() * 100,
+            production_output: Math.random() * 100
+          }
+          await fetch(`${API_BASE_URL}/sensors`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(sensorReading)
+          })
+        }
+      }
+      // After posting new reading, refresh data
+      if (selectedFacility === null) return
+      const [facilityData, sensorData] = await Promise.all([
+        fetchFacilities(),
+        fetchSensorReadings(selectedFacility),
+      ])
+      setSensorReadings(sensorData)
+      // Fetch all statuses at once
+        const statusEntries = await Promise.all(
+          facilityData.map(async (f) => {
+            const status = await fetchFacilityStatus(f.facility_id)
+            return [f.facility_id, status] as [number, FacilityStatus]
+          })
+        )
+        setFacilityStatuses(new Map(statusEntries))
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Fetch facilities, assets, and facility statuses on page load
   useEffect(() => {
     const load = async () => {
       setLoading(true)
       try {
-        const data = await fetchFacilities()
-        setFacilities(data)
+        const [facilityData] = await Promise.all([
+          fetchFacilities(),
+        ])
+        setFacilities(facilityData)
+
+        // Fetch all statuses at once
+        const statusEntries = await Promise.all(
+          facilityData.map(async (f) => {
+            const status = await fetchFacilityStatus(f.facility_id)
+            return [f.facility_id, status] as [number, FacilityStatus]
+          })
+        )
+        setFacilityStatuses(new Map(statusEntries))
       } catch (err: any) {
         setError(err.message)
       } finally {
@@ -87,20 +143,15 @@ function App() {
     load()
   }, [])
 
-  // Fetch assets + sensor readings when a facility is selected
+  // Fetch sensor readings when a facility is selected
   useEffect(() => {
     if (selectedFacility === null) return
     const load = async () => {
-      setLoading(true)
       try {
-        const [assetData, sensorData, facilityStatus] = await Promise.all([
-          fetchAssets(selectedFacility),
-          fetchSensorReadings(),
-          fetchFacilityStatus(selectedFacility)
+        const [sensorData] = await Promise.all([
+          fetchSensorReadings(selectedFacility),
         ])
-        setAssets(assetData)
         setSensorReadings(sensorData)
-        setFacilityStatus(facilityStatus)
       } catch (err: any) {
         setError(err.message)
       } finally {
@@ -110,6 +161,68 @@ function App() {
     load()
   }, [selectedFacility])
 
+  // Poll results inputted into dashboard
+  useEffect(() => {
+    generateSensorReadings()
+
+    const intervalId = setInterval(generateSensorReadings, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [])
+
+  // Add these column definitions inside your App component (or just above the return)
+
+  const facilityColumns: ColumnsType<Facility & { status?: FacilityStatus }> = [
+    {
+      title: 'Facility',
+      dataIndex: 'facility_name',
+      key: 'facility_name',
+      render: (name: string, record) => (
+        <button onClick={() => setSelectedFacility(record.facility_id)}>{name}</button>
+      ),
+    },
+    {
+      title: 'Latest Reading Time',
+      key: 'latest_reading_time',
+      render: (_, record) =>
+        record.status ? new Date(record.status.latest_reading_time).toLocaleString() : '—',
+    },
+    {
+      title: 'Latest Temperature',
+      key: 'latest_temperature',
+      render: (_, record) => record.status?.latest_temperature ?? '—',
+    },
+    {
+      title: 'Latest Pressure',
+      key: 'latest_pressure',
+      render: (_, record) => record.status?.latest_pressure ?? '—',
+    },
+    {
+      title: 'Total Power Consumption',
+      key: 'total_power_consumption',
+      render: (_, record) => record.status?.total_power_consumption ?? '—',
+    },
+    {
+      title: 'Total Production Output',
+      key: 'total_production_output',
+      render: (_, record) => record.status?.total_production_output ?? '—',
+    },
+  ]
+
+  const sensorColumns: ColumnsType<SensorReading> = [
+    { title: 'Sensor', dataIndex: 'sensor_name', key: 'sensor_name' },
+    {
+      title: 'Timestamp',
+      dataIndex: 'timestamp',
+      key: 'timestamp',
+      render: (ts: string) => new Date(ts).toLocaleString(),
+    },
+    { title: 'Temperature', dataIndex: 'temperature', key: 'temperature' },
+    { title: 'Pressure', dataIndex: 'pressure', key: 'pressure' },
+    { title: 'Power', dataIndex: 'power_consumption', key: 'power_consumption' },
+    { title: 'Output', dataIndex: 'production_output', key: 'production_output' },
+  ]
+
   return (
     <>
       <h1>Manufacturing Facility Dashboard</h1>
@@ -117,88 +230,28 @@ function App() {
       {loading && <p>Loading...</p>}
       {error && <p style={{ color: 'red' }}>Error: {error}</p>}
 
-      <section>
-        <h2>Facility</h2>
-        {facilities.length === 0 && !loading ? (
-          <p>No facilities found.</p>
-        ) : (
-          <ul>
-            {facilities.map(facility => (
-              <table>
-                <tr>
-                  <th>
-                    <button onClick={() => setSelectedFacility(facility.facility_id)}>
-                      {facility.facility_name}
-                    </button>
-                  </th>
-                  <td><p>Facility id: {facility.facility_id}</p></td>
-                </tr>
-              </table>
-            ))}
-          </ul>
-        )}
-      </section>
+    <section>
+      <h2>Facility Status</h2>
+      <Table
+        rowKey="facility_id"
+        columns={facilityColumns}
+        dataSource={facilities.map(f => ({ ...f, status: facilityStatuses.get(f.facility_id) }))}
+        loading={loading}
+        pagination={false}
+      />
+    </section>
 
       {(selectedFacility !== null) && (
         <>
           <section>
-            <h2>Facility Status for {facilities.find(f => f.facility_id === selectedFacility)?.facility_name}</h2>
-            {facilityStatus ? (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Latest Reading Time</th>
-                    <th>Latest Temperature</th>
-                    <th>Latest Pressure</th>
-                    <th>Total Power Consumption</th>
-                    <th>Total Production Output</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>{new Date(facilityStatus.latest_reading_time).toLocaleString()}</td>
-                    <td>{facilityStatus.latest_temperature}</td>
-                    <td>{facilityStatus.latest_pressure}</td>
-                    <td>{facilityStatus.total_power_consumption}</td>
-                    <td>{facilityStatus.total_production_output}</td>
-                  </tr>
-                </tbody>
-              </table>
-            ) : (
-              <p>No facility status data available.</p>
-            )}
-          </section>
-
-          <section>
             <h2>Sensor Readings</h2>
-            {sensorReadings.length === 0 ? (
-              <p>No sensor readings found.</p>
-            ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Sensor</th>
-                    <th>Timestamp</th>
-                    <th>Temperature</th>
-                    <th>Pressure</th>
-                    <th>Power</th>
-                    <th>Output</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sensorReadings.map(reading => (
-                    <tr key={reading.sensor_id}>
-                      <td>{reading.sensor_name}</td>
-                      <td>{new Date(reading.timestamp).toLocaleString()}</td>
-                      <td>{reading.temperature}</td>
-                      <td>{reading.pressure}</td>
-                      <td>{reading.power_consumption}</td>
-                      <td>{reading.production_output}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+            <Table
+              rowKey="sensor_id"
+              columns={sensorColumns}
+              dataSource={sensorReadings}
+              loading={loading}
+              pagination={{ pageSize: 10 }}
+            />
           </section>
           <section>
             <h2>Sensor Readings Chart</h2>
@@ -210,7 +263,7 @@ function App() {
   )
 }
 
-function SensorChart({ readings }: { readings: SensorReading[] }) {
+function SensorChart({ readings = [] }: { readings?: SensorReading[] }) {
   const chartData = readings
     .map(r => ({
       time: new Date(r.timestamp).getTime(), // numeric ms for proper time axis
